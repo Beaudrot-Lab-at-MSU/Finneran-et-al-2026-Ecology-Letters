@@ -3,6 +3,8 @@
 Dataset DOI: [10.5061/dryad.zkh1893nh](https://doi.org/10.5061/dryad.zkh1893nh)
 Link to Paper: https://onlinelibrary.wiley.com/doi/10.1111/ele.70368
 
+License: CC BY-NC 4.0
+
 ## Description of the data and file structure
 
 This dataset includes the data and code required to replicate analyses in this manuscript, examining the environmental drivers of food web structure across 127 protected areas in Sub-Saharan Africa. Data includes meta-web predator-prey interaction data for non-volant mammal species larger than 500g in accordance with Jonathan Kingdon's Mammals of Africa volumes and with published global predator-prey interaction data (Fricke *et al.* 2022). Coordinates correspond to protected-area centroids and do not represent precise species occurrence locations.
