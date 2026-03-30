@@ -3,7 +3,7 @@
 Dataset DOI: [10.5061/dryad.zkh1893nh](https://doi.org/10.5061/dryad.zkh1893nh)
 Link to Paper: https://onlinelibrary.wiley.com/doi/10.1111/ele.70368
 
-License: CC BY-NC 4.0
+License: CC BY-NC 4.0 https://creativecommons.org/licenses/by-nc/4.0/
 
 ## Description of the data and file structure
 
