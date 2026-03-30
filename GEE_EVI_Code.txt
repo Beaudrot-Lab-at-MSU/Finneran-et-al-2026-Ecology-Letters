@@ -1,0 +1,64 @@
+This script is used to calculate the mean values of vegetation indices from a large amount of raster layers as collection on Google Earth Engine. Red letters in the following script are things you need to change. 
+ 
+// I. Call shapefile of study sites
+// Load locations of camera traps of sites as a FeatureCollection() from a shapefile.
+// You need to upload the shapefile to google earth engine so the platform can call the data 
+// The shapefile can be point or polygon data. This includes already buffered shapefile.
+ 
+ 
+var Sites10k = ee.FeatureCollection("users/x/Africa_Sp_Points");
+ 
+ 
+// Writing buffer function
+var bufferBy = function(size) {
+  return function(feature) {
+    return feature.buffer(size)
+    return feature.set('Code', Code);   //specifying the to pull the "code" from each site
+  };
+};
+ 
+// Generate the 10 km buffers
+var Sites = ee.FeatureCollection(Sites10k.map(bufferBy(10000)));
+ 
+ 
+// II. Call satellite product (check with the product name on dataset catalog
+// add satellite time series: MODIS EVI 500m 16 day by using ee.ImageCollection() to call and // stack images 
+var modisEVI = ee.ImageCollection('MODIS/061/MOD13A1').  //assign variable
+    filterDate('2001-01-01', '2020-01-01').  // targeted time period
+    filterBounds(Sites)    // targeted locations as filter
+    .select('EVI');          // subset the index value
+print(modisEVI, 'EVI');     // examine the stacked images
+ 
+// III. Process the stacked images with function
+// Reduce stacked images into single layer by using reduce(), and define reduce function by 
+// mean value by ee.Reducer.mean()
+var MeanEVI = modisEVI.reduce(ee.Reducer.mean());   
+print(MeanEVI);  // print the value to examine 
+ 
+//IV. Visualize the extracted EVI values
+var palette = [
+  'FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718',
+  '74A901', '66A000', '529400', '3E8601', '207401', '056201',
+  '004C00', '023B01', '012E01', '011D01', '011301'];
+Map.addLayer(MeanEVI, {min: 0, max: 10000, palette: palette}); //plot the reduced image
+Map.addLayer(Sites, {}); //plot 
+ 
+//V. Extract the values by sites with shapefile by function reduceRegions()
+var SiteMeanEVI = MeanEVI.reduceRegions({
+  collection: Sites,
+  reducer: ee.Reducer.mean(),  // define reduce function
+  scale: 500 // the targeted spatial resolution 
+});
+print(SiteMeanEVI);  // print the value to examine 
+ 
+//VI. Export table as csv file to your google drive 
+Export.table.toDrive({
+  collection: SiteMeanEVI,
+  description: 'MODIS_16day_EVI_mean',
+  folder: 'MODIS_16_EVI_170_Africa_Sites',
+  fileFormat: 'CSV'
+});   
+ 
+ 
+  
+ 

@@ -1,0 +1,105 @@
+ 
+// I. Call locations of study sites and create 10 km buffer
+// Load locations of camera traps of sites as a FeatureCollection() from a csv with locations.
+// You need to upload the shapefile to google earth engine so the platform can call the data 
+// The shapefile can be point or polygon data
+// Add points to map layer
+var Sites10k = ee.FeatureCollection("users/x/Africa_Sp_Points")
+ 
+// Writing buffer function
+var bufferBy = function(size) {
+  return function(feature) {
+    return feature.buffer(size)
+    return feature.set('Code', Code);   //specifying the to pull the "code" from each site
+  };
+};
+ 
+// Generate the 10 km buffers
+var SiteBfs = ee.FeatureCollection(Sites10k.map(bufferBy(10000)));
+ 
+ 
+ 
+// II. Call satellite product (check with the product name on dataset catalog
+// add satellite time series: MODIS LC 500m yearly by using ee.ImageCollection() to call and // stack images 
+var modisLC= ee.ImageCollection('MODIS/061/MCD12Q1').  //assign variable
+    filterDate('2001-01-01', '2020-01-01').  // targeted time period --> for year 2001 (change according to desired year)
+    filterBounds(SiteBfs)    // targeted locations as filter
+    .select('LC_Type1');          // subset the index value
+print(modisLC, 'LC_Type1');     // examine the stacked images
+ 
+ 
+ 
+// III. Process the stacked images with function
+// Reduce stacked images into single layer by using reduce(), and define reduce function by 
+// mean value by ee.Reducer.mean()
+var MeanLC = modisLC.reduce(ee.Reducer.mode());
+print(MeanLC, 'MeanLC');  // print the value to examine 
+ 
+ 
+ 
+//IV. Masking water out for binary reclassification
+// reclassify to make a masking object in which water is 0 and everything else is 1
+var Masker = MeanLC
+              .where(MeanLC.gte(1).and(MeanLC.lte(16)),1) //class 1
+              .where(MeanLC.eq(17),0) //class 0
+ 
+// Applying mask to landcover data frame so that water is set to no value
+var MaskedLC = MeanLC.mask(Masker)
+ 
+ 
+ 
+//V. Reclassifying to desired levels for binary reclass
+var BinaryReclass = MaskedLC
+              .where(MeanLC.gte(1).and(MeanLC.lte(11)),1) //class 1
+              .where(MeanLC.gte(12).and(MeanLC.lte(13)),2) //class 2
+              .where(MeanLC.gte(14).and(MeanLC.lte(16)),1) //class 1 to levels above the anthro classes
+ 
+print(BinaryReclass, "Binary reclass") // checking the binary reclass
+ 
+ 
+ 
+//VI. Masking the non-habitat landcover for multihabitat reclassification
+var Masker2 = MeanLC
+              .where(MeanLC.gte(1).and(MeanLC.lte(11)),1) //class 1
+              .where(MeanLC.gte(12).and(MeanLC.lte(13)),0) //class 0
+              .where(MeanLC.gte(14).and(MeanLC.lte(16)),1) //class 1
+              .where(MeanLC.eq(17),0) //class 0
+ 
+// Applying secondary mask without urban and ag
+var MaskedLC2 = MeanLC.mask(Masker2)
+ 
+ 
+//VIII. Clipping landcover to buffers. 
+// Function to make the buffer feature class and landcover image into an image collection
+var colFuncBinary = function(feat) {
+  var Code = feat.get("Code")
+  var clipped = BinaryReclass.clip(feat).set("Code", Code) // retaining the code for export
+  return clipped
+}
+ 
+// Map the FC to an IC 
+var BinaryClip = ee.ImageCollection(SiteBfs.map(colFuncBinary));
+ 
+ 
+ 
+ 
+ 
+//X. Mass exporting all of the sites as individual TIFF files
+// Convert image collection into list. 
+var imageListBinary = BinaryClip.toList(BinaryClip.size())
+var numImagesBinary = imageListBinary.size().getInfo() // replace 3 with this. 3 is a test parameter to keep from running 127 iterations 
+ 
+for (var i=0; i<127; i++) {
+  var image = ee.Image(imageListBinary.get(i))
+  var Code = image.get('Code').getInfo()
+  Export.image.toDrive({
+    image:image, 
+    description:Code+"_Average_BI", //change the year to desired description
+    folder: 'AfricanMammalCommunityLandCoverTIFFS', 
+    fileNamePrefix: Code+"_Average_BI", //change the year to desired description
+    region: image.geometry().getInfo(), 
+    scale: 500,
+    maxPixels: 160000000,
+    fileFormat: 'GeoTIFF'
+  })
+}

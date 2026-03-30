@@ -1,0 +1,15 @@
+Region,Predictor,r,p
+All,Productivity,0.32,0.001
+CONGO,Productivity,0.007,0.964
+LAKET,Productivity,0.03,0.856
+DRY,Productivity,0.003,0.986
+SDSVN,Productivity,0.13,0.039
+SVN,Productivity,0.13,0.270
+VBAR,Productivity,-0.19,0.208
+All,Fragmentation,-0.004,0.914
+CONGO,Fragmentation,0.41,0.009
+LAKET,Fragmentation,-0.05,0.763
+DRY,Fragmentation,-0.15,0.475
+SDSVN,Fragmentation,0.016,0.821
+SVN,Fragmentation,0.001,0.999
+VBAR,Fragmentation,0.14,0.271

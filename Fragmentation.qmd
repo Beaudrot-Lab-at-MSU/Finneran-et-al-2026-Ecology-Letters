@@ -1,0 +1,75 @@
+---
+title: "Fragmentation_Metric"
+format: html
+editor: visual
+---
+
+## This script is for calculating the fragmentation metric
+
+### Load Libraries
+
+```{r}
+library(raster)
+library(landscapemetrics)
+library(sp)
+library(sf)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(rlang)
+```
+
+### Metric for Binary Fragmentation
+
+```{r binary land cover}
+
+# Bring in site data 
+SiteTable <- read.table(file="African_Mammal_FoodWebs_Locations.csv", header=TRUE, sep=",")
+
+# Bring in all the site land cover tifs
+#list with all site names 
+site_names <- SiteTable$Code
+
+
+# Empty lists to hold the values 
+aggregation_index_class <- rep(0, 127)
+
+
+# Create for loop to run landscape metrics for all sites
+for (site in 1:length(site_names)) {
+  
+  #bring in tif files
+  site_tif <- paste("AfricanMammalCommunityLandCoverTIFFS_BI/",site_names[site],"_Average_BI.tif",sep="")
+  
+  #turn into raster 
+  site_raster=raster(site_tif)
+  values(site_raster)[values(site_raster) == 0] = NA
+
+
+  #aggregation index--> class level --> need to do this so only habitat cells are counted. if a raster is all cropland/human impacts then it will be a 0 aggregation habitat index
+  ag_AI_class <- lsm_c_ai(site_raster) 
+  if (ag_AI_class$class[1]==2) {
+    aggregation_index_class[site] <- 0
+  } else {
+    aggregation_index_class[site] <- ag_AI_class$value[1]
+  }
+  
+  
+    #track which file is being run and make sure for loop is properly cycling
+  #message <- paste("Working on ",site_names[site])
+  #print(message)
+}
+
+
+
+#combine everything into 1 data frame
+land_cover_binary_df <- data.frame(Code = site_names,
+                            bin.AG.class = aggregation_index_class)
+
+land_cover_binary_df
+
+# Export to csv and add to site, region, and primary productivity data in the Final_Regions_Predictors.csv
+```
+
+### 

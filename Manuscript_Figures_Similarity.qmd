@@ -1,0 +1,1011 @@
+---
+title: "Manuscript Figures"
+format: html
+editor: visual
+---
+
+## This is code for generating all figures in the MS.
+
+**NOTE**: **Please restart R before running any code in this file and do not click RUN for this document at the top of the script**. There is a bug with ecodist that will be triggered if you do not restart R or do not run cell by cell as a function will be overwritten by the proxy package: <https://github.com/phiala/ecodist>
+
+```{r load libraries}
+library(bipartite)
+library(broom)
+library(car)
+library(cheddar)
+library(dplyr)
+library(forcats)
+library(ggraph)
+library(ggrepel)
+library(ggmap)
+library(ggplot2)
+library(ggspatial)
+library(igraph)
+library(lmtest)
+library(MASS)
+library(Matrix)
+library(metanetwork)
+library(patchwork)
+library(phytools)
+library(rlang)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(sf)
+library(spdep)
+library(spatialreg)
+library(tidygraph)
+library(tidyr)
+library(tidyverse)
+library(tseries)
+library(units)
+library(vegan)
+library(ecodist)
+
+
+# This confirms if the ecodist package is working
+dim(dist(matrix(1:12, ncol = 3)))   # should return NULL, if not then proxy is overwriting ecodist
+```
+
+**Due to issues with ecodist, this cell must be run first.**
+
+```{r AppendixS4 Multi Mantel}
+
+
+# Align the FGW matrix as needed for these 127 sites
+fgw_matrix_function <- function(useobject) {
+  
+  # Get names of sites to use as rownames in matrix to subset FGW 
+  sitenames <- useobject$Code
+  rownames(useobject) <- sitenames
+  
+  
+  # Bring in site data to use later for rownames
+  SiteTable_raw <- read.table(file="African_Mammal_FoodWebs_Locations.csv", header=TRUE, sep=",")
+  
+  # Bring in fused GW distance matrix
+  FW_approach_raw <- read.csv("pairwise_fgw.csv", sep=",")
+  # Remove rownames row
+  FW_approach_raw <- FW_approach_raw[,-1]
+  
+  # Match order of locations and FGW csv to correctly add codes for subsetting by region later
+  SiteTable <- SiteTable_raw[match(colnames(FW_approach_raw), SiteTable_raw$Community), ]
+  
+  
+  # Remove colnames and rownames for proper formatting later
+  colnames(FW_approach_raw) <- NULL
+  FW_approach <- data.matrix(FW_approach_raw)
+  
+  # Changing to site code names to match later to env variables
+  rownames(FW_approach) <- SiteTable$Code
+  colnames(FW_approach) <- SiteTable$Code
+  # Create overall distance matrix in the proper format for the function
+  comm <- FW_approach[match(rownames(useobject),rownames(FW_approach)),match(rownames(useobject),rownames(FW_approach))]
+  dim(comm)
+  comm <- comm[,colSums(comm, na.rm=TRUE) > 0]
+  dim(comm)
+  overall_matrix_raw <- as.matrix(comm)  
+  
+  # Now we will take the log of these distances, see appendix for info for how this accounts for
+  # the impact of # of species on the FGW.
+  overall_matrix <- log(overall_matrix_raw)
+  
+  # This will replace negative values that results from very small FGW caused by being the same web
+  # This happens in only 1 site
+  overall_matrix[overall_matrix < 0] <- 0
+  
+  # Convert to similarity
+  #overall_matrix <- overall_matrix*-1
+  
+  return(overall_matrix)
+}
+
+
+multi_mantel_regions <- function(region_name) {
+  
+  # Bring in all predictors
+  all_env_vars_raw <- read.table(file="Final_Regions_and_Predictors.csv", header=TRUE, sep=",")
+
+  # Only select the sites to be included in the analysis
+  all_env_vars <- subset(all_env_vars_raw, Remove==0)
+  
+  if (region_name=="All") {
+    sites_to_use <- all_env_vars 
+  } else {
+    sites_to_use <- subset(all_env_vars, Region==region_name)
+  }
+
+
+  # Create distance matrix of predictors
+  prod_dist <- dist(scale(sites_to_use$EVI_mean),method = "euclidean",diag = TRUE, upper = TRUE) 
+
+  #Subtract agg from 100 to get a value for fragmentation
+    frag_dist <- dist(scale(100-sites_to_use$bin.AG.class),method = "euclidean",diag = TRUE, upper = TRUE)  # Euclidean distance
+
+  # Make coordinates into spatial objects
+  coords <- data_frame(Long=sites_to_use$Long, Lat=sites_to_use$Lat)
+
+  # Change to meters
+  sites <- st_as_sf(coords, coords = c("Long", "Lat"), crs = 4326)
+  dist_m <- st_distance(sites)   # units = meters
+  geo_dist_unit <- units::set_units(dist_m, "km") # change unit to kilometers
+
+  # Create distance matrix
+  geo_dist <- drop_units(geo_dist_unit)
+  
+
+  # Subet fGW for these sites 
+  fgw <- fgw_matrix_function(sites_to_use)
+  
+  
+  ## RUN MODELS ##
+  # Initialize list to save results 
+  results <- vector(mode = "list", length = 8)
+  names(results) = c('EVI','Frag','Geo', 'R-Squared MRM','R-Squared Hand-Calc', 'lm R-Squared', 'Veg Plot', 'Frag Plot')
+  # Set seed for reproducibilty
+  set.seed(123)
+  # EVI
+ evi <-  ecodist::mantel(as.dist(fgw) ~ as.dist(prod_dist) + as.dist(frag_dist) + as.dist(geo_dist),nperm = 10000)
+ 
+ # Save results to list
+ results[[1]] <- evi
+
+  # Frag
+  frag <- ecodist::mantel(as.dist(fgw) ~ as.dist(frag_dist) + as.dist(prod_dist) + as.dist(scale(geo_dist)),nperm = 10000)
+  
+  # Save results to list
+ results[[2]] <- frag
+
+  # Geo
+  geo <- ecodist::mantel(as.dist(fgw) ~ as.dist(geo_dist) + as.dist(prod_dist) + as.dist(frag_dist),nperm = 10000)
+  
+  # Save results to list
+ results[[3]] <- geo
+  
+  # Now let's try to calculate R-squared
+  r_sq <- MRM(formula = as.dist(fgw) ~ as.dist(prod_dist) + as.dist(frag_dist) + as.dist(geo_dist), nperm = 1000,method = "linear", mrank = FALSE)
+  
+  
+  # Save results to list
+ results[[4]] <- r_sq
+  
+  # Calculate R-Squared a different way
+  r_y1 <- ecodist::mantel(as.dist(fgw) ~ as.dist(prod_dist))[[1]] # Mantel r between Y and X1
+  r_y2 <- ecodist::mantel(as.dist(fgw) ~ as.dist(frag_dist))[[1]]
+  r_y3 <- ecodist::mantel(as.dist(fgw) ~ as.dist(geo_dist))[[1]]
+
+  r_12 <- ecodist::mantel(as.dist(prod_dist) ~ as.dist(frag_dist))[[1]]
+  r_13 <- ecodist::mantel(as.dist(prod_dist) ~ as.dist(geo_dist))[[1]]
+  r_23 <- ecodist::mantel(as.dist(frag_dist) ~ as.dist(geo_dist))[[1]]
+
+  r_yX <- c(r_y1, r_y2, r_y3)
+  R_XX <- matrix(c(1,   r_12, r_13,
+                 r_12, 1,   r_23,
+                 r_13, r_23, 1),
+               nrow=3, byrow=TRUE)
+
+  # invert (use ginv if singular)
+  Rinv <- tryCatch(solve(R_XX), error = function(e) ginv(R_XX))
+
+  R2_from_mantel <- as.numeric(t(r_yX) %*% Rinv %*% r_yX)
+  # Save results to list
+ results[[5]] <- R2_from_mantel
+  
+   
+ 
+  # Finally, visualize
+  # Vectorize distance matrices and multiply by -1 to create similarity
+  y_vec <- as.vector(as.dist(fgw)*-1)
+  geo_vec <- as.vector(as.dist(geo_dist)*-1)
+  veg_vec <- as.vector(as.dist(prod_dist)*-1)
+  frag_vec <- as.vector(as.dist(frag_dist)*-1)
+  
+  # Check R Squared in stsnard lm
+   lm_model <- summary(lm(y_vec ~ geo_vec + veg_vec + frag_vec))
+   results[[6]] <- lm_model 
+
+  # Regress out controls to plot veg
+  res_fgw_veg <- residuals(lm(y_vec ~ frag_vec + geo_vec))
+  res_veg   <- residuals(lm(veg_vec ~ frag_vec + geo_vec))
+  # Plot
+  veg_resid_plot <- ggplot(data.frame(res_veg, res_fgw_veg), aes(x = res_veg, y = res_fgw_veg)) +
+    geom_point(alpha = 0.4) +
+    geom_smooth(method="lm", color="blue", se=FALSE) +
+    labs(x = "Veg residuals", y = "FGW residuals") +
+    theme_minimal() 
+  
+  
+  # Regress out controls to plot frag
+  res_fgw_frag <- residuals(lm(y_vec ~ veg_vec + geo_vec))
+  res_frag   <- residuals(lm(frag_vec ~ veg_vec + geo_vec))
+  # Plot
+  frag_resid_plot <- ggplot(data.frame(res_frag, res_fgw_frag), aes(x = res_frag, y = res_fgw_frag)) +
+    geom_point(alpha = 0.4) +
+    geom_smooth(method="lm", color="blue", se=FALSE) +
+    labs(x = "Frag residuals", y = "FGW residuals") +
+    theme_minimal() 
+  
+  
+  # Save results to list
+ results[[7]] <- veg_resid_plot
+ results[[8]] <- frag_resid_plot
+ 
+  
+  return(results)
+
+  
+}
+
+multi_mantel_regions("All")
+multi_mantel_regions("Congolian Forests")
+multi_mantel_regions("Lake Turkana")
+multi_mantel_regions("Southern Drylands")
+multi_mantel_regions("Subequatorial Savannas & Woodlands")
+multi_mantel_regions("Sudanian Savanna")
+multi_mantel_regions("Victoria Basin & Albertine Rift Forests")
+
+
+
+
+
+
+```
+
+## Main text Figures
+
+```{r Figure2 Metaweb}
+# Bring in metaweb csv
+metaweb_raw <- read_csv("Africa_metaweb_above500.csv")
+# Change rownames to prey species column
+metaweb_names <- tibble::column_to_rownames(metaweb_raw, var = "Prey_Species") 
+# Change to matrix
+metaweb <- as.matrix(metaweb_names)
+
+# Bring in presence/absence data
+species_present_all <- read_csv("above_500_PA_data.csv")
+
+# Remove species column
+species_present_raw <- species_present_all[,-1]
+# Switch columns and rows of species present to get data in correct format for metaweb
+species_present <- (t(species_present_raw))
+colnames(species_present) <- species_present_all$Species
+
+
+# Creating S3 metanetwork object
+meta_Africa <- build_metanet(
+  metaweb,
+  abTable=species_present
+)
+
+# Check an individual site
+#plot(meta_Africa$ABER)
+#plot(meta_Africa$KFR)
+
+
+# Let's make a better lookinh metaweb with mbetter labeling
+#https://jeremydfoote.com/Communication-and-Social-Networks/resources/ggraph_walkthrough.html
+metaweb_nicer <- read_csv("Africa_metaweb_above500.csv")
+# Change rownames to prey species column
+metaweb_nicer <- column_to_rownames(metaweb_nicer, var = "Prey_Species") %>% as_tibble()
+
+# Change to matrix
+metaweb_nicer_matrix <- as.matrix(metaweb_nicer)
+
+# Bring in node information
+node_info <- read.csv("Node_Data_500g.csv")
+
+# Creating graph object from adjacency matrix and turning it into a tidy graph
+metaweb_nicer_adj <- graph_from_adjacency_matrix(metaweb_nicer_matrix,mode="directed",diag=FALSE) 
+
+metaweb_nicer_graph <- as_tbl_graph(metaweb_nicer_adj)
+
+# Adding node information
+metaweb_nicer_graph  <- metaweb_nicer_graph  %>% 
+  activate(nodes) %>% 
+  mutate(mass=node_info$Mass.g, order=node_info$Order)
+
+# Check if it worked
+metaweb_nicer_graph
+
+# Graph it
+meta_tg <- metaweb_nicer_graph %>% 
+  ggraph(layout = "fr") +
+  geom_edge_arc(colour= "black",
+                lineend = "round",
+                strength = .1,
+                alpha = .1) +
+  geom_node_point(aes(color=order, size=log(mass/1000))) +
+  geom_node_text(aes(label = name), 
+                 repel = TRUE, 
+                 point.padding = unit(0.1, "lines"),
+                 size=3,
+                 colour="black") +
+  scale_size_continuous(name = "Log(Body Mass in kg)") +
+  theme_graph(background = "white") +
+  scale_color_manual(name = "Order",values = c("red", "navyblue", "green","purple","black",
+                                "brown","pink","orange","lightblue",
+                                "gray","darkgreen","yellow")) +
+  guides(edge_width = FALSE,
+         edge_alpha = FALSE)
+
+meta_tg
+
+
+
+
+# Remove species labels 
+meta_tg_unlabeled <- metaweb_nicer_graph %>% 
+  ggraph(layout = "fr") +
+  geom_edge_arc(colour= "black",
+                lineend = "round",
+                strength = .1,
+                alpha = .1) +
+  geom_node_point(aes(color=order, size=log(mass/1000))) +
+  scale_size_continuous(name = "Log(Body Mass in kg)") +
+  theme_graph(background = "white") +
+  scale_color_manual(name = "Order",values = c("red", "navyblue", "green","purple","black",
+                                "brown","pink","orange","lightblue",
+                                "gray","darkgreen","yellow")) +
+  guides(edge_width = FALSE,
+         edge_alpha = FALSE) + 
+  theme(legend.text = element_text(size = 12),  # Adjust the size for legend text
+        legend.title = element_text(size = 14)) # Adjust the size for legend title
+
+meta_tg_unlabeled
+```
+
+```{r Figure3 Map of Sites}
+# Load Africa map data
+africa <- ne_countries(scale = "medium", returnclass = "sf", continent = "Africa")
+africa <- africa[africa$admin != "Madagascar", ]  # Filter out Madagascar by name
+
+# Bring in data 
+map_info_raw <- read.csv(file="Final_Regions_and_Predictors.csv", header=TRUE, sep=",")
+# Remove excluded sites
+map_info_sites_to_use <- subset(map_info_raw, Remove==0)
+
+# Create data frame of points
+data_points <- data.frame(
+  lon = map_info_sites_to_use$Long,  # Pull longitude coordinates from dataset
+  lat = map_info_sites_to_use$Lat,      # Pull latitude coordinates from dataset
+  Region = map_info_sites_to_use$Region # regions from dataset
+)
+
+
+# Plot the map with scale bar and north arrow
+ggplot(data = africa) +
+  geom_sf(fill = "gray90", color = NA) +  # Plot Africa map
+  geom_point(data = data_points, aes(x = lon, y = lat, shape = Region), size = 2) +
+  scale_shape_manual(values = c(3, 8, 5, 16, 15, 17)) +  # Define shapes for Regions
+  labs(
+    title = "Map of Study Sites",
+    x = "Longitude",
+    y = "Latitude",
+    color = "Region"
+  ) +
+  # Add scale bar
+  #annotation_scale(location = "bl", width_hint = 0.2) +
+  # Add north arrow
+  annotation_north_arrow(
+    location = "bl", which_north = "true",
+    pad_x = unit(0.5, "cm"), pad_y = unit(0.75, "cm"), # Adjust padding to move north arrow up
+    style = north_arrow_fancy_orienteering
+  ) + 
+    # Remove gridlines
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),   # Remove gridlines
+    panel.background = element_rect(fill = "white", color = NA), # White background
+    plot.title = element_text(hjust = 0.5),  # Center the title
+    axis.line = element_line(color = "black", size = 0.5)  # Add axis lines
+  )
+```
+
+```{r Figure5 All Site Added Variable Plot}
+
+# Align the FGW matrix as needed for these 127 sites
+fgw_matrix_function <- function(useobject) {
+  
+  # Get names of sites to use as rownames in matrix to subset FGW 
+  sitenames <- useobject$Code
+  rownames(useobject) <- sitenames
+    # Bring in site data to use later for rownames
+  SiteTable_raw <- read.table(file="African_Mammal_FoodWebs_Locations.csv", header=TRUE, sep=",")
+  
+  # Bring in fused GW distance matrix
+  FW_approach_raw <- read.csv("pairwise_fgw.csv", sep=",")
+  # Remove rownames row
+  FW_approach_raw <- FW_approach_raw[,-1]
+  
+  # Match order of locations and FGW csv to correctly add codes for subsetting by region later
+  SiteTable <- SiteTable_raw[match(colnames(FW_approach_raw), SiteTable_raw$Community), ]
+  
+  
+  # Remove colnames and rownames for proper formatting later
+  colnames(FW_approach_raw) <- NULL
+  FW_approach <- data.matrix(FW_approach_raw)
+  
+  # Changing to site code names to match later to env variables
+  rownames(FW_approach) <- SiteTable$Code
+  colnames(FW_approach) <- SiteTable$Code
+  
+  
+  
+  # Create overall distance matrix in the proper format for the function
+  comm <- FW_approach[match(rownames(useobject),rownames(FW_approach)),match(rownames(useobject),rownames(FW_approach))]
+  dim(comm)
+  comm <- comm[,colSums(comm, na.rm=TRUE) > 0]
+  dim(comm)
+  overall_matrix_raw <- as.matrix(comm)  
+  
+  # Now we will take the log of these distances, see appendix for info for how this accounts for
+  # the impact of # of species on the FGW.
+  overall_matrix <- log(overall_matrix_raw)
+  
+  # This will replace negative values that results from very small FGW caused by being the same web
+  # This happens in only 1 site
+  overall_matrix[overall_matrix < 0] <- 0
+  
+  # Convert to similarity
+  #overall_matrix <- overall_matrix*-1
+  
+  return(overall_matrix)
+}
+
+
+
+all_env_vars_raw <- read.table(file="Final_Regions_and_Predictors.csv", header=TRUE, sep=",")
+
+# Only select the sites to be included in the analysis
+all_env_vars <- subset(all_env_vars_raw, Remove==0)
+
+
+# Create distance matrix of predictors
+prod_dist_all <- dist(scale(all_env_vars$EVI_mean),method = "euclidean",diag = FALSE, upper = FALSE) 
+
+frag_dist_all <- dist(scale(100-all_env_vars$bin.AG.class),method = "euclidean",diag = FALSE, upper = FALSE)  # Euclidean distance
+
+# Make coordinates into spatial objects
+coords <- data_frame(Long=all_env_vars$Long, Lat=all_env_vars$Lat)
+
+# Change to meters
+sites <- st_as_sf(coords, coords = c("Long", "Lat"), crs = 4326)
+dist_m <- st_distance(sites)   # units = meters
+geo_dist_unit <- units::set_units(dist_m, "km") # change unit to kilometers
+
+# Create distance matrix
+geo_dist <- drop_units(geo_dist_unit)
+
+# Subet fGW for these sites 
+fgw_all <- fgw_matrix_function(all_env_vars)
+
+
+
+# Okay now let's plot this in a nice plot
+# Finally, visualize
+# Vectorize distance matrices and multiply by -1 to create similarity
+fgw_vec <- as.vector(as.dist(fgw_all)*-1)
+geo_vec <- as.vector(as.dist(scale(geo_dist))*-1)
+veg_vec <- as.vector(as.dist(prod_dist_all)*-1)
+frag_vec <- as.vector(as.dist(frag_dist_all)*-1)
+
+# Get the names of the sites 
+site_names <- colnames(fgw_all)
+# Create a pairwise list
+pairwise_list <- combn(site_names, 2, simplify = FALSE)
+pairwise_df <- as.data.frame(do.call(rbind, pairwise_list))
+colnames(pairwise_df) <- c("Site1", "Site2")
+
+# Combine the two columns into one with names separated by "_"
+pairwise_df$Combined <- paste(pairwise_df$Site1, pairwise_df$Site2, sep = "_")
+
+# Add vectors to dataframe
+all_model <- data.frame(pairwise_df$Combined,veg_vec, frag_vec, geo_vec, fgw_vec)
+
+# Bring in region data for labeling later
+region_info_raw <- read.csv(file="Final_Regions_and_Predictors.csv", header=TRUE, sep=",")
+# Remove excluded sites
+region_info_to_use <- subset(region_info_raw, Remove==0)
+
+# Grab columns we need, Code and Region
+region_info <- region_info_to_use[,c(1,2)]
+
+# Split pair into two site columns
+all_model <- all_model %>%
+  separate(pairwise_df.Combined, into = c("site1", "site2"), sep = "_")
+
+# Add region info for each site
+all_model <- all_model %>%
+  left_join(region_info, by = c("site1" = "Code")) %>%
+  rename(region1 = Region) %>%
+  left_join(region_info, by = c("site2" = "Code")) %>%
+  rename(region2 = Region)
+
+# Create SAME/DIFFERENT column
+all_model <- all_model %>%
+  mutate(region_match = ifelse(region1 == region2, "SAME", "DIFFERENT"))
+
+all_model <- all_model %>%
+  mutate(shared_region = ifelse(region1 == region2, region1, "No region"))
+
+# Make column into vector of colors
+cols <- ifelse(all_model$region_match == "SAME", "purple", "black")
+
+# Make column into vector of shapes
+shapes <- ifelse(all_model$region_match == "SAME", 16, 1)
+
+
+
+
+
+
+
+# Set up plotting area: 1 row, 2 columns
+par(mfrow = c(1, 2))
+
+# First plot: EVI
+model <- lm(fgw_vec ~ veg_vec + frag_vec + geo_vec, data = all_model)
+avPlot(model, "veg_vec",
+       main = "",
+       xlab = "Plant Productivity Similarity", ylab = "Food Web Similarity",
+       ylim = c(-3, 3),
+       id = FALSE,
+       grid = FALSE,
+       col=cols,
+       pch = shapes) 
+
+legend("bottomright", 
+       legend = c("Same Region", "Different Region"),
+       col = c("purple", "black"),
+       pch = c(16, 1),
+       bty = "n")
+
+# First plot label
+text(x = par("usr")[1] + 0.05 * diff(par("usr")[1:2]),
+     y = par("usr")[4] - 0.05 * diff(par("usr")[3:4]),
+     labels = "a.", cex = 1.2, font = 2)
+
+
+# Second plot: Fragmentation
+model <- lm(fgw_vec ~ veg_vec + frag_vec + geo_vec, data = all_model)
+avPlot(model, "frag_vec",
+       main = "",
+       xlab = "Fragmentation Similarity", ylab = "Food Web Similarity",
+       ylim = c(-3, 3),
+       col.lines = NA,
+       id = FALSE,
+       grid = FALSE,
+       col=cols,
+       pch = shapes)
+abline(lm(residuals(model) ~ residuals(lm(frag_vec ~ veg_vec + geo_vec, data = all_model))),
+       lty = 2, lwd = 2, col="blue")  
+
+legend("bottomright", 
+       legend = c("Same Region", "Different Region"),
+       col = c("purple", "black"),
+       pch = c(16, 1),
+       bty = "n")
+
+
+# Second plot label
+text(x = par("usr")[1] + 0.05 * diff(par("usr")[1:2]),
+     y = par("usr")[4] - 0.05 * diff(par("usr")[3:4]),
+     labels = "b.", cex = 1.2, font = 2)
+
+
+  
+
+  
+```
+
+```{r Figure6 Partial Mantel and Predictors Visualization}
+
+# Partial Mantel Region Results
+# Bring in partial mantel data 
+pm_results_barplot_raw <- read.csv(file="Partial_Mantel_Barplot.csv", header=TRUE, sep=",")
+
+# Remove the all_sites results
+pm_results_barplot <- subset(pm_results_barplot_raw, Region!="All")
+
+# Placing them in order of increasing productivity
+desired_order <- c("DRY","LAKET","SDSVN","SVN","VBAR","CONGO")
+pm_results_barplot <- pm_results_barplot %>%
+  mutate(Region = factor(Region, levels = desired_order))
+
+
+all_var_plot <- ggplot(pm_results_barplot, aes(fill=Predictor, y=r, x=Region)) + 
+    geom_bar(position="dodge", stat="identity") + 
+  theme(panel.grid = element_blank(), 
+        axis.title.x = element_text(vjust = 0, size = 15),
+        axis.title.y = element_text(vjust = 0, size = 15),
+        axis.text = element_text(size = 12),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black")) + 
+  scale_fill_manual(values=c( "chocolate4","green4")) +
+  ylab("Partial Mantel correlation coefficient (r)") +
+  scale_y_continuous(limits = c(-0.2, 0.5)) + 
+  theme(
+    legend.position = c(0.05, 0.95),  # x = left, y = top
+    legend.justification = c("left", "top"),  
+    legend.background = element_rect(fill = "white", color = NA),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  ) + annotate(
+    "text", x = -Inf, y = Inf, label = "(b)", 
+    size = 6, fontface = "bold", hjust = -0.1, vjust = 1
+  )
+
+
+# Variation in Predictors
+predictor_info <- read.csv(file="Final_Regions_and_Predictors.csv", header=TRUE, sep=",")
+# Creating new dataframe to sort for EVI order in violin plot
+evi_regions <- subset(predictor_info, Remove==0)
+
+# Labels in order of ascending EVI
+evi_labels=c("DRY","LAKET","SDSVN","SVN","VBAR","CONGO")
+
+# Plot
+p_evi <- evi_regions %>% 
+  mutate(Region = fct_reorder(Region, EVI_mean, .fun = mean)) %>% 
+  ggplot(aes(Region, EVI_mean)) + 
+  geom_violin(width = 1) + labs(
+    x = "Region",
+    y = "Primary Productivity (EVI)",
+    title = "") + 
+  theme(panel.grid = element_blank(), 
+        axis.title.x = element_text(vjust = 0, size = 15),
+        axis.title.y = element_text(vjust = 0, size = 15),
+        axis.text = element_text(size = 12),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black")) + 
+  geom_boxplot(width=0.1) +  
+  scale_x_discrete(labels=evi_labels) + 
+  annotate(
+    "text", x = -Inf, y = Inf, label = "(a)", 
+    size = 6, fontface = "bold", hjust = -0.1, vjust = 1
+  )
+
+# EVI Values Summary
+evi_regions  %>% group_by(Region) %>%
+summarize(mean(EVI_mean))
+
+
+
+# Plot
+p_evi + all_var_plot
+```
+
+## Appendix Figures
+
+```{r AppendixS1 Metaweb Link Information}
+# We added more links after combining data. The following numbers denote the same type of link (Documented (1 & 4), Genus (2 & 5), and Mass based (3 & 6). 1-3 are from our original data collection, and 4-6 were added later. We combined these sums in the appendix summary for each type of link. 
+
+# Bring in links
+new_links_raw <- read_csv("Africa_metaweb_above500.csv")
+# Change rownames to prey species column
+new_links_raw <- column_to_rownames(new_links_raw, var = "Prey_Species") %>% as_tibble()
+# Change to matrix
+new_links <- as.matrix(new_links_raw)
+# Bring in node information
+node_info <- read.csv("Node_Data_500g.csv")
+# Creating graph object from adjacency matrix and turning it into a tidy graph
+new_links_adj <- graph_from_adjacency_matrix(new_links,mode="directed",diag=FALSE,weighted=TRUE) 
+new_links_adj <- as_tbl_graph(new_links_adj)
+# Adding node information
+meta_new_links  <- new_links_adj  %>% 
+  activate(nodes) %>% 
+  mutate(mass=node_info$Mass.g, order=node_info$Order)
+
+
+# Between Original Food Web and Evan Fricke, we added 320 new carnivore links
+
+# This gives us all the info about the web in a dataframe
+web_info_df = as_long_data_frame(meta_new_links)
+
+# Lets see how many of each weight there is, aka how many of each type of link.
+web_info_df  %>% group_by(weight) %>%
+summarize(n())
+# These numbers are summed up in appendix S2, table A.
+
+
+
+# Now let's add "from_order" because this will tell us how many link types from prey
+# Prey Tallies
+web_info_df %>%
+  mutate(weight_group = case_when(
+    weight %in% c(1, 4) ~ "Documented",
+    weight %in% c(2, 5) ~ "Genus",
+    weight %in% c(3, 6) ~ "Mass"
+  )) %>%
+  group_by(weight_group, from_order) %>%
+  summarize(count = n(), .groups = "drop") %>%
+  complete(weight_group, from_order, fill = list(count = 0)) %>%
+  pivot_wider(
+    names_from = weight_group,
+    values_from = count
+  )
+
+# Now let's add "to_order" because this will tell us how many link types from predator
+# Predator Tallies
+web_info_df %>%
+  mutate(weight_group = case_when(
+    weight %in% c(1, 4) ~ "Documented",
+    weight %in% c(2, 5) ~ "Genus",
+    weight %in% c(3, 6) ~ "Mass"
+  )) %>%
+  group_by(weight_group, to_order) %>%
+  summarize(count = n(), .groups = "drop") %>%
+  complete(weight_group, to_order, fill = list(count = 0)) %>%
+  pivot_wider(
+    names_from = weight_group,
+    values_from = count
+  )
+
+
+```
+
+```{r AppendixS2 Justification for logging fGW}
+# Get the distance matrices for number of nodes and fused GW distance to plot later
+FW_approach_raw <- read.csv("pairwise_fgw.csv", sep=",")
+
+# Bring in site data to use later for rownames
+SiteTable <- read.table(file="African_Mammal_FoodWebs_Locations.csv", header=TRUE, sep=",")
+
+# Remove colnames and rownames 
+FW_approach_raw <- FW_approach_raw[,-1]
+colnames(FW_approach_raw) <- NULL
+FW_approach <- data.matrix(FW_approach_raw)
+
+# Changing to site code names
+rownames(FW_approach) <- SiteTable$Code
+colnames(FW_approach) <- SiteTable$Code
+
+# Bring in env data
+all_env_vars_raw <- read.table(file="Final_Regions_and_Predictors.csv", header=TRUE, sep=",")
+
+# Only select the sites included in the analysis
+all_env_vars <- subset(all_env_vars_raw,Remove==0)
+
+# Select just the predictor variables we want
+env1 <- scale(all_env_vars$num_nodes)
+env2 <- all_env_vars$num_nodes
+
+
+# Combine the env variable that we are using 
+env_vars <- data.frame(Code=all_env_vars$Code,env1,env2)
+# Set column names to which variables are being used
+colnames(env_vars) <- c("Code","Scaled_Num_Nodes","Num_Nodes")
+
+# Remove site code 
+env_sites <- subset(env_vars, select=-c(Code))
+
+# Get names of sites to use as rownames in matrix 
+sitenames <- env_vars$Code
+rownames(env_sites) <- sitenames
+
+
+# Create overall distance matrix matching site names
+comm <- FW_approach[match(rownames(env_sites),rownames(FW_approach)),match(rownames(env_sites),rownames(FW_approach))]
+dim(comm)
+comm <- comm[,colSums(comm, na.rm=TRUE) > 0]
+dim(comm)
+overall_matrix <- as.matrix(comm)  
+
+
+# Get number of nodes difference
+
+# Using dist function to get difference
+node_difference <- dist(env_sites$Num_Nodes,diag = FALSE, upper = FALSE)
+
+# Change to vector
+node_difference_vector <- as.vector(node_difference)
+
+# FGW to match, need to remove the diagonal
+fgw_vector_to_match <- as.vector(as.dist(overall_matrix))
+
+
+# Plot
+par(mfrow=c(1,2))
+plot(node_difference_vector,fgw_vector_to_match, main="Difference in Number of Nodes vs. Fused GW",
+     xlab="Difference in Number of Nodes", ylab="Fused GW Distance")
+plot(node_difference_vector,log(fgw_vector_to_match), main="Difference in Number of Nodes vs. Logged Fused GW",ylim=c(5,15),
+     xlab="Difference in Number of Nodes", ylab="Logged Fused GW Distance")
+
+
+###### Now let's look at connectance ########
+
+
+# Get the distance matrices for number of nodes and fused GW distance to plot later
+FW_approach_raw <- read.csv("pairwise_fgw.csv", sep=",")
+
+# Bring in site data to use later for rownames
+SiteTable <- read.table(file="African_Mammal_FoodWebs_Locations.csv", header=TRUE, sep=",")
+
+# Remove colnames and rownames 
+FW_approach_raw <- FW_approach_raw[,-1]
+colnames(FW_approach_raw) <- NULL
+FW_approach <- data.matrix(FW_approach_raw)
+
+# Changing to site code names
+rownames(FW_approach) <- SiteTable$Code
+colnames(FW_approach) <- SiteTable$Code
+
+# Bring in data on which regions to keep
+all_env_vars_raw_input <- read.table(file="Final_Regions_and_Predictors.csv", header=TRUE, sep=",")
+network_metrics_raw <- read.table(file="NetworkMetrics.csv", header=TRUE, sep=",")
+#Drop remove column
+network_metrics_raw <- network_metrics_raw[,-4]
+  
+all_env_vars_raw <- merge(all_env_vars_raw_input,network_metrics_raw, by="Code" )
+# Only select the sites included in the analysis
+all_env_vars <- subset(all_env_vars_raw,Remove==0)
+
+
+# Select just the predictor variables we want
+conect <- all_env_vars$Connectance
+
+
+# Combine the two env variable that we are using 
+env_vars <- data.frame(Code=all_env_vars$Code,conect)
+# Set column names to which variables are being used
+colnames(env_vars) <- c("Code","Connectance")
+
+# Remove site code 
+env_sites <- subset(env_vars, select=-c(Code))
+
+# Get names of sites to use as rownames in matrix 
+sitenames <- env_vars$Code
+rownames(env_sites) <- sitenames
+
+
+# Create overall distance matrix matching site names
+comm <- FW_approach[match(rownames(env_sites),rownames(FW_approach)),match(rownames(env_sites),rownames(FW_approach))]
+dim(comm)
+comm <- comm[,colSums(comm, na.rm=TRUE) > 0]
+dim(comm)
+overall_matrix <- as.matrix(comm)  
+
+
+# Using dist function to get difference
+connectance_difference <- stats::dist(env_sites$Connectance,diag = FALSE, upper = FALSE,method = "euclidean")
+# Change to vector to plot
+connectance_vector <- as.vector(connectance_difference)
+
+
+# FGW to match
+fgw_vector_to_match <- as.vector(as.dist(overall_matrix))
+
+
+# Plot
+par(mfrow=c(1,2))
+plot(connectance_vector,fgw_vector_to_match, main="Difference in Connectance vs. Fused GW",
+     xlab="Difference in Connectance", ylab="Fused GW Distance")
+
+plot(connectance_vector,log(fgw_vector_to_match), main="Difference in Connectance vs. Logged Fused GW",
+     xlab="Difference in Connectance", ylab="Logged Fused GW Distance", ylim=c(5,15))
+
+
+
+# Calculate correlations between fgw, species richness, and connectance 
+cor(connectance_vector,fgw_vector_to_match)
+cor(node_difference_vector,fgw_vector_to_match)
+
+
+```
+
+```{r AppendixS3}
+# See GEE scripts for how to get raw data 
+predictor_info <- read.csv(file="Final_Regions_and_Predictors.csv", header=TRUE, sep=",")
+
+predictor_info <- subset(predictor_info, Remove==0)
+
+# Biogeographic Region Grouped
+cluster1 <- subset(predictor_info,Region=="Lake Turkana")
+cluster2 <- subset(predictor_info,Region=="Southern Drylands")
+cluster3 <- subset(predictor_info,Region=="Victoria Basin & Albertine Rift Forests")
+cluster4 <- subset(predictor_info,Region=="Sudanian Savanna")
+cluster5 <- subset(predictor_info,Region=="Subequatorial Savannas & Woodlands")
+cluster6 <- subset(predictor_info,Region=="Congolian Forests")
+
+# Standard deviation within regions
+evi_sd <- predictor_info %>%
+  group_by(Region) %>%
+  summarise(std_value = mean(EVI_std, na.rm = TRUE))
+
+evi_mean <- predictor_info %>%
+  group_by(Region) %>%
+  summarise(mean_value = mean(EVI_mean, na.rm = TRUE))
+
+# Coefficent of variance
+(evi_sd$std_value/evi_mean$mean_value)*100
+  
+# Repeat for all sites
+(mean(predictor_info$EVI_std, na.rm = TRUE)/mean(predictor_info$EVI_mean, na.rm = TRUE))*100
+
+
+# Mean value within regions
+mean(predictor_info$EVI_mean, na.rm = TRUE)
+
+# Again now for fragmentation measures
+# STandard deviation within regions
+frag_sd <- predictor_info %>%
+  group_by(Region) %>%
+  summarise(std_value = mean(Frag_std, na.rm = TRUE))
+
+frag_mean <- predictor_info %>%
+  group_by(Region) %>%
+  summarise(mean_value = mean(bin.AG.class, na.rm = TRUE))
+
+# Coefficent of variance
+(frag_sd$std_value/frag_mean$mean_value)*100
+  
+# Repeat for all sites
+(mean(predictor_info$Frag_std, na.rm = TRUE)/mean(predictor_info$bin.AG.class, na.rm = TRUE))*100
+
+
+# Mean value within regions
+
+```
+
+```{r AppendixS5 Fragmentation Plot}
+
+# bring in data on variation in Predictors
+predictor_info <- read.csv(file="Final_Regions_and_Predictors.csv", header=TRUE, sep=",")
+
+# Creating new dataframe to sort for Frag order in violin plot
+frag_regions <- subset(predictor_info, Remove==0)
+
+# Labels in order for Frag
+frag_labels=c("DRY","LAKET","SDSVN","SVN","VBAR","CONGO")
+
+p_frag <- frag_regions %>% 
+  mutate(Region = fct_reorder(Region, EVI_mean, .fun = mean)) %>% 
+  ggplot(aes(Region, 100-bin.AG.class)) + 
+  geom_violin(width = 1) + labs(
+    x = "Region",
+    y = "Binary Fragmentation Index %",
+    title = "") + 
+  theme(panel.grid = element_blank(), 
+        axis.title.x = element_text(vjust = 0, size = 15),
+        axis.title.y = element_text(vjust = 0, size = 15),
+        axis.text = element_text(size = 12),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black")) + 
+  geom_boxplot(width=0.1) + 
+  scale_x_discrete(labels=frag_labels) 
+
+# Frag Values Summary
+frag_regions  %>% group_by(Region) %>%
+summarize(100-mean(bin.AG.class))
+
+frag_regions  %>% group_by(Region) %>%
+summarize(100-min(bin.AG.class))
+
+frag_regions  %>% group_by(Region) %>%
+summarize(100-max(bin.AG.class))
+
+
+```
+
+```{r AppendixS6 Correlations Between Predictor Variables}
+predictor_info <- read.csv(file="Final_Regions_and_Predictors.csv", header=TRUE, sep=",")
+
+# Overall
+cor(predictor_info[, c("EVI_mean","bin.AG.class")])
+
+# Biogeographic Region Grouped
+cluster1 <- subset(predictor_info,Region=="Lake Turkana")
+cluster2 <- subset(predictor_info,Region=="Southern Drylands")
+cluster3 <- subset(predictor_info,Region=="Victoria Basin & Albertine Rift Forests")
+cluster4 <- subset(predictor_info,Region=="Sudanian Savanna")
+cluster5 <- subset(predictor_info,Region=="Subequatorial Savannas & Woodlands")
+cluster6 <- subset(predictor_info,Region=="Congolian Forests")
+
+# Regions
+cor(cluster1[, c("EVI_mean","bin.AG.class")])
+cor(cluster2[, c("EVI_mean","bin.AG.class")])
+cor(cluster3[, c("EVI_mean","bin.AG.class")])
+cor(cluster4[, c("EVI_mean","bin.AG.class")])
+cor(cluster5[, c("EVI_mean","bin.AG.class")])
+cor(cluster6[, c("EVI_mean","bin.AG.class")])
+
+```
