@@ -1,6 +1,6 @@
 # Food web similarity increases with productivity similarity at a continental scale
 
-Dataset DOI: [10.5061/dryad.zkh1893nh](10.5061/dryad.zkh1893nh)
+Dataset DOI: [10.5061/dryad.zkh1893nh](https://doi.org/10.5061/dryad.zkh1893nh)
 
 ## Description of the data and file structure
 
